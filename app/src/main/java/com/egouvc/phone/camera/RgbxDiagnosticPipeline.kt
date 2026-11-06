@@ -136,7 +136,7 @@ class RgbxDiagnosticPipeline(
             val scaled = Bitmap.createScaledBitmap(bitmap, previewWidth, previewHeight, true)
             onPreview(scaled)
         } finally {
-            bitmap.recycle()
+            if (width > MAX_PREVIEW_WIDTH) bitmap.recycle()
         }
     }
 
@@ -179,7 +179,7 @@ class RgbxDiagnosticPipeline(
 
     companion object {
         private const val TAG = "EgoUVCPhone"
-        private const val SAMPLE_PERIOD_NS = 250_000_000L
+        private const val SAMPLE_PERIOD_NS = 0L // native preview is already paced at 10 FPS
         private const val MAX_PREVIEW_WIDTH = 960
         private const val JPEG_QUALITY = 85
     }

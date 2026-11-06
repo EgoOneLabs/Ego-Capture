@@ -21,9 +21,20 @@ class XuImuReader(
     streamingConnection: UsbDeviceConnection? = null,
     /** Original USBMonitor connection, retained only as a fallback diagnostic path. */
     borrowedConnection: UsbDeviceConnection? = null,
+    /** Only the standalone probe retains the packet already read during verification. */
+    retainVerificationPacket: Boolean = false,
 ) : Closeable {
     data class Packet(val raw: ByteArray, val beforeBootNs: Long, val afterBootNs: Long,
                       val hostUnixNs: Long, val samples: List<ImuPacketParser.Sample>)
+    class ReadFailure(val stage: String, message: String, cause: Throwable? = null,
+                      val beforeBootNs: Long = 0, val afterBootNs: Long = 0,
+                      val returnedBytes: Int = -999) :
+        Exception(message, cause)
+    private var verificationPacket: Packet? = null
+    fun verifiedProbePacket(): Packet = checkNotNull(verificationPacket) {
+        "Verification packet retention was not enabled"
+    }
+    val transportPath: String
     private val connection: UsbDeviceConnection
     private val ownsConnection: Boolean
     private val vcInterface: Int
@@ -77,8 +88,14 @@ class XuImuReader(
             // works. Never accept a connection based on these query results alone.
             // A valid 252-byte packet with 14 headers/counters is mandatory.
             return try {
+                val before = if (retainVerificationPacket) SystemClock.elapsedRealtimeNanos() else 0L
                 val raw = readControl(conn, GET_CUR, ImuPacketParser.PACKET_BYTES)
+                val after = if (retainVerificationPacket) SystemClock.elapsedRealtimeNanos() else 0L
                 val parsed = ImuPacketParser.decode(raw)
+                if (retainVerificationPacket) {
+                    verificationPacket = Packet(raw, before, after,
+                        System.currentTimeMillis() * 1_000_000L, parsed)
+                }
                 Log.i(TAG, "$path: XU GET_CUR verified: ${parsed.size} samples, " +
                     "counter=${parsed.first().counterRaw}..${parsed.last().counterRaw}")
                 true
@@ -117,22 +134,31 @@ class XuImuReader(
                 "wIndex=0x${((UNIT shl 8) or vcInterface).toString(16)}; " + attempts.joinToString("; ")
         )
         ownsConnection = isOwned
-        Log.i(TAG, "XU transport verified: " + when (connection) {
+        transportPath = when (connection) {
             streamingConnection -> "UVCCamera streaming"
             borrowedConnection -> "USBMonitor borrowed"
             else -> "separate openDevice"
-        })
+        }
+        Log.i(TAG, "XU transport verified: $transportPath")
     }
 
     fun readPacket(): Packet {
         val data = ByteArray(ImuPacketParser.PACKET_BYTES)
         val before = SystemClock.elapsedRealtimeNanos()
-        val n = connection.controlTransfer(REQUEST_TYPE, GET_CUR, SELECTOR shl 8,
-            UNIT shl 8 or vcInterface, data, data.size, TRANSFER_TIMEOUT_MS)
+        val n = try {
+            connection.controlTransfer(REQUEST_TYPE, GET_CUR, SELECTOR shl 8,
+                UNIT shl 8 or vcInterface, data, data.size, TRANSFER_TIMEOUT_MS)
+        } catch (e: Exception) {
+            throw ReadFailure("usb_transfer", "XU GET_CUR 请求异常：${e.message}", e,
+                before, SystemClock.elapsedRealtimeNanos(), -999)
+        }
         val after = SystemClock.elapsedRealtimeNanos()
-        require(n == data.size) { "XU GET_CUR returned $n (need ${data.size})" }
-        return Packet(data, before, after, System.currentTimeMillis() * 1_000_000L,
-            ImuPacketParser.decode(data))
+        if (n != data.size) throw ReadFailure("usb_transfer", "XU GET_CUR 返回 $n 字节，期望 ${data.size}",
+            beforeBootNs = before, afterBootNs = after, returnedBytes = n)
+        val samples = try { ImuPacketParser.decode(data) } catch (e: Exception) {
+            throw ReadFailure("packet_parse", "IMU 包解析失败：${e.message}", e, before, after, n)
+        }
+        return Packet(data, before, after, System.currentTimeMillis() * 1_000_000L, samples)
     }
 
     private fun readControl(conn: UsbDeviceConnection, request: Int, size: Int): ByteArray {

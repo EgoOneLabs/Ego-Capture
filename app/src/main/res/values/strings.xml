@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+<?xml version='1.0' encoding='utf-8'?>
 <resources>
     <string name="app_name">EgoUVC Phone</string>
     <string name="target_device">目标设备：1bcf:0b15（2UQ2）</string>
@@ -6,7 +6,7 @@
     <string name="label_vid_pid">VID:PID</string>
     <string name="label_usb_host">USB Host</string>
     <string name="label_connection">连接状态</string>
-    <string name="label_camera_permission">CAMERA 权限</string>
+    <string name="label_camera_permission">相机权限</string>
     <string name="label_usb_permission">USB 权限</string>
     <string name="not_available">—</string>
     <string name="supported">支持</string>
@@ -15,10 +15,10 @@
     <string name="not_granted">未授予</string>
     <string name="no_target_device">无目标设备</string>
     <string name="state_disconnected">未连接目标设备</string>
-    <string name="state_camera_required">需要 CAMERA 权限</string>
+    <string name="state_camera_required">需要 相机权限</string>
     <string name="state_usb_required">需要 USB 权限</string>
     <string name="state_usb_pending">等待 USB 授权结果</string>
-    <string name="state_ready">授权就绪，尚未开始采集</string>
+    <string name="state_ready">设备已连接，权限已就绪</string>
     <string name="state_error">错误</string>
     <string name="refresh_devices">刷新设备</string>
     <string name="request_permission">申请权限</string>
@@ -27,9 +27,38 @@
     <string name="close_camera">关闭相机</string>
     <string name="video_idle">视频：未打开</string>
     <string name="video_opening">视频：正在打开 / 等待首帧</string>
-    <string name="video_streaming">视频：收到帧</string>
-    <string name="video_fps_waiting">解码后帧回调 FPS：待测量</string>
+    <string name="video_streaming">视频：正在接收</string>
+    <string name="video_fps_waiting">接收 / 解码帧率：等待测量</string>
     <string name="video_requires_ready">请先完成 CAMERA 与 USB 授权。</string>
     <string name="preview_surface_unavailable">预览界面尚未就绪。</string>
     <string name="supported_modes">设备声明的 UVC 模式</string>
+    <string name="capture_text_0">头环采集</string>
+    <string name="capture_text_1">双目预览</string>
+    <string name="capture_text_2">导出任务与设备</string>
+    <string name="capture_text_3">任务名称，例如 task001</string>
+    <string name="capture_text_4">设备编号，例如 2UQ2_001</string>
+    <string name="capture_text_5">停止后转换左右 MKV；转换需等待。原始计数保留；IMU 使用名义单位换算，采样时间与同步待验证。</string>
+    <string name="capture_text_6">录制</string>
+    <string name="capture_text_7">开始采集</string>
+    <string name="capture_text_8">停止并保存</string>
+    <string name="capture_text_9">保存目标：30 FPS；实际帧率在采集时显示</string>
+    <string name="capture_text_10">保存帧率（采集期间锁定）</string>
+    <string name="capture_text_11">原始视频速率：等待采集（MB = 1,000,000 字节）</string>
+    <string name="capture_text_12">尚未录制。开始采集后，图像、头环 IMU 与时间戳将保存到同一会话。</string>
+    <string name="capture_text_13">IMU 检查</string>
+    <string name="capture_text_14">IMU：尚未探测</string>
+    <string name="capture_text_15">检查 IMU（单次，不录制）</string>
+    <string name="capture_text_16">单次检查成功不代表连续采集无缺样。</string>
+    <string name="capture_text_17">展开设备与诊断详情</string>
+    <string name="capture_text_18">设备名称 / USB 路径</string>
+    <string name="capture_text_19">设备标识 VID:PID</string>
+    <string name="capture_text_20">USB 主机能力</string>
+    <string name="capture_text_21">相机权限</string>
+    <string name="capture_text_22">USB 设备权限</string>
+    <string name="capture_text_23">相机请求模式（配置值）</string>
+    <string name="capture_text_24">实时回调统计（不是保存帧率）</string>
+    <string name="capture_text_25">抽样绘制统计</string>
+    <string name="capture_text_26">抽样预览绘制：等待帧（不含底层 SurfaceView）</string>
+    <string name="capture_text_27">设备声明模式（不是实测能力）</string>
+    <string name="audio_status_initial">头环声音：开始采集后检查 USB 麦克风</string>
 </resources>

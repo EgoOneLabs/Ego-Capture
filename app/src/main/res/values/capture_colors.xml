@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="ego_canvas">#F4F6FB</color>
+    <color name="ego_surface">#FFFFFF</color>
+    <color name="ego_text">#17243A</color>
+    <color name="ego_muted">#5C6980</color>
+    <color name="ego_border">#DEE4EF</color>
+    <color name="ego_primary">#4F46E5</color>
+    <color name="ego_primary_pressed">#3D35BD</color>
+    <color name="ego_primary_soft">#EEEDFF</color>
+    <color name="ego_stop">#B53348</color>
+    <color name="ego_stop_soft">#FCECEF</color>
+    <color name="ego_disabled">#E8ECF3</color>
+    <color name="ego_disabled_text">#7D8798</color>
+    <color name="ego_preview">#101B2E</color>
+</resources>
