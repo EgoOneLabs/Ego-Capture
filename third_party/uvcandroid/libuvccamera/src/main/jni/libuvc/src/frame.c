@@ -123,6 +123,15 @@ uvc_error_t uvc_duplicate_frame(uvc_frame_t *in, uvc_frame_t *out) {
     out->sequence = in->sequence;
     out->capture_time = in->capture_time;
     out->capture_time_finished = in->capture_time_finished;
+    out->diagnostic_pts = in->diagnostic_pts;
+    out->diagnostic_scr = in->diagnostic_scr;
+    out->diagnostic_sof = in->diagnostic_sof;
+    out->diagnostic_flags = in->diagnostic_flags;
+    out->diagnostic_clock_hz = in->diagnostic_clock_hz;
+    out->diagnostic_first_pts = in->diagnostic_first_pts;
+    out->diagnostic_payload_count = in->diagnostic_payload_count;
+    out->diagnostic_pts_count = in->diagnostic_pts_count;
+    out->diagnostic_boundary = in->diagnostic_boundary;
     out->source = in->source;
 
     memcpy(out->data, in->data, in->data_bytes);

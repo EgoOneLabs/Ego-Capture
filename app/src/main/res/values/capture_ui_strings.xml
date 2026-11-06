@@ -1,0 +1,18 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="ui_brand">Ego Capture</string>
+    <string name="ui_subtitle">双目 · IMU · USB 音频</string>
+    <string name="ui_connection">设备连接</string>
+    <string name="ui_preview">实时预览</string>
+    <string name="ui_session">采集设置</string>
+    <string name="ui_task_label">任务名称</string>
+    <string name="ui_device_label">设备编号</string>
+    <string name="ui_frame_rate">目标保存帧率</string>
+    <string name="ui_capture_hint">停止后继续本地导出，请保持应用在前台。</string>
+    <string name="ui_recording">采集与保存状态</string>
+    <string name="ui_expand_status">展开保存详情</string>
+    <string name="ui_collapse_status">收起保存详情</string>
+    <string name="ui_data_scope">IMU 保留原始计数与名义 SI；时间与连续性仍待验收。</string>
+    <string name="ui_imu_probe">独立 IMU 检查（不录制）</string>
+    <string name="ui_preview_waiting">双目预览：等待画面 · 左 / 右</string>
+</resources>

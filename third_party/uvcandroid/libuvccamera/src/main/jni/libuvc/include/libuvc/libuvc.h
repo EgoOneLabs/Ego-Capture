@@ -499,6 +499,12 @@ typedef struct uvc_frame {
     void *metadata;
     /** Size of metadata buffer */
     size_t metadata_bytes;
+    /* Diagnostic raw device-clock values; never interpreted as host/exposure time. */
+    uint32_t diagnostic_pts, diagnostic_scr, diagnostic_clock_hz;
+    uint16_t diagnostic_sof;
+    uint8_t diagnostic_flags;
+    uint32_t diagnostic_first_pts, diagnostic_payload_count, diagnostic_pts_count;
+    uint32_t diagnostic_boundary;
 } uvc_frame_t;
 
 /** A callback function to handle incoming assembled UVC frames

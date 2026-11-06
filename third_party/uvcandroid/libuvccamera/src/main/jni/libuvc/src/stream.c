@@ -842,6 +842,17 @@ void _uvc_swap_buffers(uvc_stream_handle_t *strmh) {
     strmh->outbuf = tmp_buf;
     strmh->hold_last_scr = strmh->last_scr;
     strmh->hold_pts = strmh->pts;
+    strmh->hold_diagnostic_sof = strmh->diagnostic_sof;
+    strmh->hold_diagnostic_flags = strmh->diagnostic_flags;
+    strmh->hold_diagnostic_first_pts = strmh->diagnostic_first_pts;
+    strmh->hold_diagnostic_payload_count = strmh->diagnostic_payload_count;
+    strmh->hold_diagnostic_pts_count = strmh->diagnostic_pts_count;
+    /* JPEG byte markers describe boundaries only, not successful decoding. */
+    if (strmh->hold_bytes >= 2 && strmh->holdbuf[0] == 0xff && strmh->holdbuf[1] == 0xd8)
+        strmh->diagnostic_boundary |= 8;
+    if (strmh->hold_bytes >= 2 && strmh->holdbuf[strmh->hold_bytes-2] == 0xff &&
+        strmh->holdbuf[strmh->hold_bytes-1] == 0xd9) strmh->diagnostic_boundary |= 16;
+    strmh->hold_diagnostic_boundary = strmh->diagnostic_boundary;
     strmh->hold_seq = strmh->seq;
 
     /* swap metadata buffer */
@@ -856,13 +867,17 @@ void _uvc_swap_buffers(uvc_stream_handle_t *strmh) {
     strmh->seq++;
     strmh->got_bytes = 0;
     strmh->meta_got_bytes = 0;
+    strmh->diagnostic_flags = 0;
+    strmh->diagnostic_first_pts = strmh->diagnostic_payload_count = 0;
+    strmh->diagnostic_pts_count = strmh->diagnostic_boundary = 0;
+    strmh->diagnostic_sof = 0;
     strmh->last_scr = 0;
     strmh->pts = 0;
 }
 
 /** @internal
  * @brief Process a payload transfer
- * 
+ *
  * Processes stream, places frames into buffer, signals listeners
  * (such as user callback thread and any polling thread) on new frame
  *
@@ -926,21 +941,55 @@ void _uvc_process_payload(uvc_stream_handle_t *strmh, uint8_t *payload, size_t p
             return;
         }
 
+        /* MJPEG recovery: a fresh SOI starts a new image, never append it to
+         * an unfinished previous JPEG. Run before consuming this header's PTS.
+         * Do not alter non-MJPEG frame assembly. */
+        if (strmh->frame_format == UVC_FRAME_FORMAT_MJPEG && data_len >= 4 &&
+            payload[header_len] == 0xff && payload[header_len + 1] == 0xd8 &&
+            payload[header_len + 2] == 0xff && strmh->got_bytes > 0) {
+            if (strmh->got_bytes >= 2 && strmh->outbuf[strmh->got_bytes-2] == 0xff &&
+                strmh->outbuf[strmh->got_bytes-1] == 0xd9) {
+                strmh->diagnostic_boundary |= 128; /* Complete old JPEG, new SOI. */
+                _uvc_swap_buffers(strmh);
+            } else {
+                /* Discard only the incomplete assembly; do not touch held frames. */
+                strmh->seq++;
+                strmh->got_bytes = strmh->meta_got_bytes = 0;
+                strmh->pts = strmh->last_scr = 0;
+                strmh->diagnostic_flags = 0;
+                strmh->diagnostic_sof = 0;
+                strmh->diagnostic_first_pts = strmh->diagnostic_payload_count = 0;
+                strmh->diagnostic_pts_count = 0;
+                strmh->diagnostic_boundary = 64; /* New frame follows discarded partial. */
+            }
+        }
+
         if (strmh->fid != (header_info & 1) && strmh->got_bytes != 0) {
             /* The frame ID bit was flipped, but we have image data sitting
                around from prior transfers. This means the camera didn't send
                an EOF for the last transfer of the previous frame. */
+            strmh->diagnostic_boundary |= 2; /* Existing FID-change close. */
             _uvc_swap_buffers(strmh);
         }
 
         strmh->fid = header_info & UVC_STREAM_FID;
+        strmh->diagnostic_payload_count++;
+        if ((header_info & UVC_STREAM_EOF) && data_len == 0)
+            strmh->diagnostic_boundary |= 32; /* Observed header-only EOF; no behavior change. */
 
         if (header_info & UVC_STREAM_PTS) {
             // XXX saki some camera may send broken packet or failed to receive all data
             if (LIKELY(variable_offset + 4 <= header_len)) {
-                strmh->pts = DW_TO_INT(payload + variable_offset);
+                const uint32_t diagnostic_pts = DW_TO_INT(payload + variable_offset);
+                if (strmh->diagnostic_pts_count == 0) strmh->diagnostic_first_pts = diagnostic_pts;
+                strmh->diagnostic_pts_count++;
+                if ((strmh->diagnostic_flags & 1) && strmh->pts != diagnostic_pts)
+                    strmh->diagnostic_flags |= 4;
+                strmh->diagnostic_flags |= 1;
+                strmh->pts = diagnostic_pts;
                 variable_offset += 4;
             } else {
+                strmh->diagnostic_flags |= 8;
                 MARK("bogus packet: header info has UVC_STREAM_PTS, but no data");
                 strmh->pts = 0;
             }
@@ -951,8 +1000,12 @@ void _uvc_process_payload(uvc_stream_handle_t *strmh, uint8_t *payload, size_t p
             // XXX saki some camera may send broken packet or failed to receive all data
             if (LIKELY(variable_offset + 6 <= header_len)) {
                 strmh->last_scr = DW_TO_INT(payload + variable_offset);
+                strmh->diagnostic_sof = (payload[variable_offset + 4] |
+                    ((uint16_t)payload[variable_offset + 5] << 8)) & 0x7ff;
+                strmh->diagnostic_flags |= 2;
                 variable_offset += 6;
             } else {
+                strmh->diagnostic_flags |= 8;
                 MARK("bogus packet: header info has UVC_STREAM_SCR, but no data");
                 strmh->last_scr = 0;
             }
@@ -982,9 +1035,16 @@ void _uvc_process_payload(uvc_stream_handle_t *strmh, uint8_t *payload, size_t p
 
         if (header_info & UVC_STREAM_EOF ||
             strmh->got_bytes == strmh->cur_ctrl.dwMaxVideoFrameSize) {
+            if (header_info & UVC_STREAM_EOF) strmh->diagnostic_boundary |= 1;
+            if (strmh->got_bytes == strmh->cur_ctrl.dwMaxVideoFrameSize) strmh->diagnostic_boundary |= 4;
             /* The EOF bit is set, so publish the complete frame */
             _uvc_swap_buffers(strmh);
         }
+    } else if (strmh->frame_format == UVC_FRAME_FORMAT_MJPEG &&
+               (header_info & UVC_STREAM_EOF) && strmh->got_bytes > 0) {
+        /* EOF may legitimately arrive in a header-only payload. */
+        strmh->diagnostic_boundary |= 256;
+        _uvc_swap_buffers(strmh);
     }
 }
 
@@ -1298,6 +1358,12 @@ uvc_error_t uvc_stream_start(
     strmh->running = 1;
     strmh->seq = 1;
     strmh->fid = 0;
+    strmh->diagnostic_flags = strmh->hold_diagnostic_flags = 0;
+    strmh->diagnostic_first_pts = strmh->hold_diagnostic_first_pts = 0;
+    strmh->diagnostic_payload_count = strmh->hold_diagnostic_payload_count = 0;
+    strmh->diagnostic_pts_count = strmh->hold_diagnostic_pts_count = 0;
+    strmh->diagnostic_boundary = strmh->hold_diagnostic_boundary = 0;
+    strmh->diagnostic_sof = strmh->hold_diagnostic_sof = 0;
     strmh->pts = 0;
     strmh->last_scr = 0;
 
@@ -1559,6 +1625,15 @@ void _uvc_populate_frame(uvc_stream_handle_t *strmh) {
     }
 
     frame->sequence = strmh->hold_seq;
+    frame->diagnostic_pts = strmh->hold_pts;
+    frame->diagnostic_scr = strmh->hold_last_scr;
+    frame->diagnostic_sof = strmh->hold_diagnostic_sof;
+    frame->diagnostic_flags = strmh->hold_diagnostic_flags;
+    frame->diagnostic_clock_hz = strmh->cur_ctrl.dwClockFrequency;
+    frame->diagnostic_first_pts = strmh->hold_diagnostic_first_pts;
+    frame->diagnostic_payload_count = strmh->hold_diagnostic_payload_count;
+    frame->diagnostic_pts_count = strmh->hold_diagnostic_pts_count;
+    frame->diagnostic_boundary = strmh->hold_diagnostic_boundary;
     frame->capture_time_finished = strmh->capture_time_finished;
 
     /* copy the image data from the hold buffer to the frame (unnecessary extra buf?) */

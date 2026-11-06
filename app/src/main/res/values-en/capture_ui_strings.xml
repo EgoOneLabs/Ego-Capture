@@ -1,0 +1,18 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="ui_brand">Ego Capture</string>
+    <string name="ui_subtitle">Stereo · IMU · USB audio</string>
+    <string name="ui_connection">Connection</string>
+    <string name="ui_preview">Live preview</string>
+    <string name="ui_session">Capture settings</string>
+    <string name="ui_task_label">Task name</string>
+    <string name="ui_device_label">Device ID</string>
+    <string name="ui_frame_rate">Target saved frame rate</string>
+    <string name="ui_capture_hint">Keep the app in the foreground while saving and exporting.</string>
+    <string name="ui_recording">Capture &amp; save status</string>
+    <string name="ui_expand_status">Show save details</string>
+    <string name="ui_collapse_status">Hide save details</string>
+    <string name="ui_data_scope">IMU raw counts and nominal SI are retained; timing and continuity remain unverified.</string>
+    <string name="ui_imu_probe">Standalone IMU check (no recording)</string>
+    <string name="ui_preview_waiting">Stereo preview: waiting for frames · left / right</string>
+</resources>

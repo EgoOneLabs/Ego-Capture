@@ -87,6 +87,7 @@ private:
     jobject mFrameCallbackObj;
     jobject mRawFrameCallbackObj;
     jmethodID mRawFrameMethod;
+    int64_t mLastPreviewBootNs = 0; // callback thread only; preview decode at most 10 FPS
     pthread_mutex_t raw_callback_mutex;
     convFunc_t mFrameCallbackFunc;
     Fields_iframecallback iframecallback_fields;
