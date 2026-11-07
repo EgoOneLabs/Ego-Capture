@@ -121,6 +121,15 @@ See [source manifest](docs/code16-source-manifest.json) and [status/evidence](do
 
 Do not silently shorten polling sleeps, fabricate samples or emit fake orientation. First confirm branch/APK/signature and read existing evidence. Run build/tests for code changes, preserve failures and inputs, and keep “implemented”, “UI confirmed” and “data-quality accepted” distinct. Existing passed recordings need not be replayed merely because the documentation changes.
 
+## Distributed runtime inputs
+
+Run `python3 scripts/verify_checkout.py` after cloning to verify the 1,210-file
+code16 baseline, Gradle wrapper and native build inputs. Sources, resources and
+vendored native components are included; no historical patch ZIP is required.
+Generate the current machine's SDK path as described above. See the
+[local file inventory](docs/LOCAL_FILES.md). This does not run an APK build or
+device acceptance test.
+
 ## Licensing and contributions
 
 Issues/PRs on device compatibility, XU IMU, timing and data quality are welcome. No confirmed top-level project LICENSE is present; maintainers must settle project licensing. Preserve each third-party UVC/USB/JPEG component's copyright and license. Third-party licenses do not automatically license all project code.
