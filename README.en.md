@@ -123,6 +123,10 @@ Do not silently shorten polling sleeps, fabricate samples or emit fake orientati
 
 ## Distributed runtime inputs
 
+The [colleague handoff guide](docs/COLLEAGUE_HANDOFF.zh-CN.md) inventories APK,
+source, SDK/NDK, Kalibr image, local packaging and setup steps. A source bundle
+does not include an APK; obtain the checksum-verified workstation artifact.
+
 Run `python3 scripts/verify_checkout.py` after cloning to verify the 1,210-file
 code16 baseline, Gradle wrapper and native build inputs. Sources, resources and
 vendored native components are included; no historical patch ZIP is required.

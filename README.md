@@ -157,6 +157,9 @@ IMU协议为252B/包，14条18B记录：帧头、32位原始计数器、六个16
 
 ## 运行文件完整性
 
+同事接手所需APK、源码、SDK/NDK、标定镜像、打包清单及步骤见
+[完整交接指南](docs/COLLEAGUE_HANDOFF.zh-CN.md)。APK须由原工作站提供并核对摘要；源码包不等于安装包。
+
 源码、JNI拆分器、UVC/USB/JPEG/YUV组件、资源和Gradle Wrapper均已随仓库提交。
 新克隆后运行 `python3 scripts/verify_checkout.py` 核对1210个code16基线文件和
 本地构建入口。机器专用SDK路径需按上文生成，不依赖旧补丁ZIP。
