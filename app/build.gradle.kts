@@ -3,6 +3,8 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+// Nominal SI export; retain A control polling (post-write 10ms).
+
 android {
     namespace = "com.egouvc.phone"
     compileSdk = 35
@@ -11,11 +13,16 @@ android {
         applicationId = "com.egouvc.phone"
         minSdk = 31
         targetSdk = 35
-        versionCode = 5
-        versionName = "0.2.3-raw-mjpeg"
+        versionCode = 16
+        versionName = "0.3.5-capture-ui"
+    }
+
+    defaultConfig {
+        buildConfigField("boolean", "IMU_POLL_START_BASED", "false")
     }
 
     buildFeatures {
+        buildConfig = true
         viewBinding = true
     }
 

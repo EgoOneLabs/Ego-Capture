@@ -312,6 +312,13 @@ struct uvc_stream_handle {
     uint32_t seq, hold_seq;
     uint32_t pts, hold_pts;
     uint32_t last_scr, hold_last_scr;
+    uint16_t diagnostic_sof, hold_diagnostic_sof;
+    /* 1=PTS seen, 2=SCR seen, 4=PTS changed within frame, 8=truncated timing field */
+    uint8_t diagnostic_flags, hold_diagnostic_flags;
+    uint32_t diagnostic_first_pts, hold_diagnostic_first_pts;
+    uint32_t diagnostic_payload_count, hold_diagnostic_payload_count;
+    uint32_t diagnostic_pts_count, hold_diagnostic_pts_count;
+    uint32_t diagnostic_boundary, hold_diagnostic_boundary;
     size_t got_bytes, hold_bytes;
     uint8_t *outbuf, *holdbuf;
     pthread_mutex_t cb_mutex;

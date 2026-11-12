@@ -3,6 +3,8 @@ package com.egouvc.phone.camera
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.graphics.Color
+import android.view.View
 import android.os.SystemClock
 import android.util.AttributeSet
 import android.widget.ImageView
@@ -12,6 +14,19 @@ class MeasuredPreviewImage @JvmOverloads constructor(
     context: Context,
     attrs: AttributeSet? = null,
 ) : ImageView(context, attrs) {
+    init {
+        // Opaque coverage prevents any native Surface from leaking through the
+        // FIT_CENTER margins or a frame being cleared during camera restart.
+        setBackgroundColor(Color.BLACK)
+        scaleType = ScaleType.FIT_CENTER
+    }
+
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        val width = View.MeasureSpec.getSize(widthMeasureSpec)
+        val desiredHeight = (width.toLong() * UvcMode.TARGET_HEIGHT / UvcMode.TARGET_WIDTH).toInt()
+        setMeasuredDimension(width, resolveSize(desiredHeight, heightMeasureSpec))
+    }
+
     var onRenderedFps: ((Double) -> Unit)? = null
     private var image: Bitmap? = null
     private var submitted = 0L

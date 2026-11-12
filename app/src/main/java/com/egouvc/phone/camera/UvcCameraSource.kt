@@ -12,6 +12,8 @@ import android.util.Log
 import android.view.Surface
 import com.egouvc.phone.usb.UsbDeviceMatcher
 import com.egouvc.phone.recording.EpisodeRecorder
+import com.egouvc.phone.recording.RecordingJobState
+import com.egouvc.phone.recording.RecordingMetrics
 import com.egouvc.phone.recording.XuImuReader
 import com.serenegiant.usb.IFrameCallback
 import com.serenegiant.usb.IRawFrameCallback
@@ -36,6 +38,7 @@ class UvcCameraSource(
         var camera: UVCCamera? = null,
         var monitorConnection: android.hardware.usb.UsbDeviceConnection? = null,
         var pipeline: RgbxDiagnosticPipeline? = null,
+        var previewDelivery: LatestPreviewDelivery? = null,
         @Volatile var recorder: EpisodeRecorder? = null,
         var openingStarted: Boolean = false,
         @Volatile var lastFrameBootNs: Long = 0,
@@ -43,6 +46,9 @@ class UvcCameraSource(
     private var active: Session? = null
     @Volatile private var generation = 0
     private var status = CameraStatus(CameraPhase.IDLE)
+    // Camera close invalidates preview callbacks, never this local recording job.
+    private val recordingJob = RecordingJobState()
+    private var recordingMetrics: RecordingMetrics? = null
 
     fun open(device: UsbDevice, previewSurface: Surface) {
         check(Looper.myLooper() == Looper.getMainLooper())
@@ -125,12 +131,12 @@ class UvcCameraSource(
             val meter = FrameRateMeter()
             // UVCAndroid delivers RGBX, NOT the original MJPEG bytes. The sampled
             // pipeline provides a reliable preview and explicitly diagnostic capture.
+            val delivery = LatestPreviewDelivery(main) { bmp ->
+                if (session.id == generation) onDecodedPreview(bmp) else bmp.recycle()
+            }
+            session.previewDelivery = delivery
             val pipeline = RgbxDiagnosticPipeline(context, selected.width, selected.height,
-                onPreview = { bmp ->
-                    main.post {
-                        if (session.id == generation) onDecodedPreview(bmp) else bmp.recycle()
-                    }
-                },
+                onPreview = delivery::offer,
                 onRecordingStatus = { isRecording, message ->
                     main.post {
                         if (session.id == generation) publish(status.copy(
@@ -141,21 +147,34 @@ class UvcCameraSource(
             )
             session.pipeline = pipeline
             val recorder = EpisodeRecorder(context, session.device, selected.width, selected.height,
+                onAudioStatus = { message -> main.post {
+                    if (recordingJob.updateAudio(session.id, message)) publish(status)
+                } },
+                onMetrics = { value -> main.post {
+                    if (recordingJob.ownsBusyJob(session.id)) {
+                        recordingMetrics = value
+                        publish(status)
+                    }
+                } },
                 streamingConnection = opened.usbControlBlock?.connection,
                 monitorConnection = control.connection,
-                onRecordingStatus = { isRecording, message ->
+                onRecordingStatus = { stage, message ->
                     main.post {
-                        if (session.id == generation) publish(status.copy(
-                            recording = isRecording, recordingMessage = message,
-                        ))
+                        // The owner is the recorder that started the job. USB may
+                        // have closed/reopened since then; its generation is irrelevant.
+                        if (recordingJob.update(session.id, stage, message)) publish(status)
                     }
                 },
             )
             session.recorder = recorder
             val rawMeter = FrameRateMeter()
-            opened.setRawFrameCallback(IRawFrameCallback { jpeg, receiveBootNs, uvcSequence, frameWidth, frameHeight ->
+            opened.setRawFrameCallback(IRawFrameCallback { jpeg, receiveBootNs, uvcSequence, frameWidth, frameHeight,
+                    devicePtsRaw, deviceScrRaw, deviceSof, timingFlags, reportedClockHz,
+                    firstPtsRaw, payloadCount, ptsCount, boundaryFlags ->
                 val rawFps = rawMeter.onFrame(receiveBootNs)
-                recorder.onRawFrame(jpeg, receiveBootNs, uvcSequence, frameWidth, frameHeight)
+                recorder.onRawFrame(jpeg, receiveBootNs, uvcSequence, frameWidth, frameHeight,
+                    devicePtsRaw, deviceScrRaw, deviceSof, timingFlags, reportedClockHz,
+                    firstPtsRaw, payloadCount, ptsCount, boundaryFlags)
                 if (rawFps != null) {
                     val count = rawMeter.totalFrames
                     main.post {
@@ -238,6 +257,8 @@ class UvcCameraSource(
         generation++
         val session = active
         active = null
+        session?.previewDelivery?.close()
+        recordingJob.requestFinish("相机连接已关闭，正在停止采集并保存原始数据…")
         publish(CameraStatus(CameraPhase.IDLE))
         session?.worker?.post {
             try {
@@ -263,12 +284,22 @@ class UvcCameraSource(
     /** Start bounded original MJPEG + raw XU IMU episode. */
     fun startEpisodeRecording() {
         check(Looper.myLooper() == Looper.getMainLooper())
-        if (status.phase != CameraPhase.STREAMING || status.recording) return
-        active?.recorder?.start()
+        if (status.phase != CameraPhase.STREAMING) return
+        val session = active ?: return
+        val recorder = session.recorder ?: return
+        // Reserve synchronously: disconnect/reconnect and a second tap cannot
+        // create another recording before this job has finished saving/exporting.
+        if (!recordingJob.begin(session.id)) return
+        recordingMetrics = null
+        publish(status)
+        recorder.start()
     }
 
     fun stopEpisodeRecording() {
         check(Looper.myLooper() == Looper.getMainLooper())
+        if (!recordingJob.snapshot().canStopCapture()) return
+        recordingJob.requestFinish("正在停止采集并保存原始数据…")
+        publish(status)
         active?.recorder?.stop()
     }
 
@@ -276,13 +307,14 @@ class UvcCameraSource(
     fun probeImu() {
         check(Looper.myLooper() == Looper.getMainLooper())
         val session = active ?: return
-        if (status.phase != CameraPhase.STREAMING || status.recording) return
+        if (status.phase != CameraPhase.STREAMING || status.recording || status.imuProbing) return
         publish(status.copy(imuProbeMessage = "正在探测 XU IMU…", imuProbing = true))
         session.worker.post {
             val result = try {
                 val streaming = session.camera?.usbControlBlock?.connection
-                XuImuReader(context, session.device, streaming, session.monitorConnection).use { reader ->
-                    val packet = reader.readPacket()
+                XuImuReader(context, session.device, streaming, session.monitorConnection,
+                    retainVerificationPacket = true).use { reader ->
+                    val packet = reader.verifiedProbePacket()
                     "IMU 成功：${packet.raw.size} B，${packet.samples.size} 组；计数器 ${packet.samples.first().counterRaw}…${packet.samples.last().counterRaw}"
                 }
             } catch (error: Exception) {
@@ -307,8 +339,15 @@ class UvcCameraSource(
             device.deviceId == active?.device?.deviceId
 
     private fun publish(value: CameraStatus) {
-        status = value
-        onStatus(value)
+        val job = recordingJob.snapshot()
+        status = value.copy(
+            recording = job.isBusy(),
+            captureCanStop = job.canStopCapture(),
+            recordingMessage = job.message,
+            audioMessage = job.audioMessage,
+            metrics = recordingMetrics,
+        )
+        onStatus(status)
     }
 
     companion object { private const val TAG = "EgoUVCPhone" }
@@ -326,7 +365,10 @@ data class CameraStatus(
     val rawFramesObserved: Long = 0,
     val message: String? = null,
     val recording: Boolean = false,
+    val captureCanStop: Boolean = false,
+    val audioMessage: String? = null,
     val recordingMessage: String? = null,
     val imuProbeMessage: String? = null,
     val imuProbing: Boolean = false,
+    val metrics: com.egouvc.phone.recording.RecordingMetrics? = null,
 )

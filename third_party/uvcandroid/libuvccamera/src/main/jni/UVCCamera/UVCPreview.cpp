@@ -295,7 +295,7 @@ int UVCPreview::setRawFrameCallback(JNIEnv *env, jobject raw_callback_obj) {
     if (raw_callback_obj) {
         jclass clazz = env->GetObjectClass(raw_callback_obj);
         if (!clazz) return -1;
-        method = env->GetMethodID(clazz, "onFrame", "(Ljava/nio/ByteBuffer;JJII)V");
+        method = env->GetMethodID(clazz, "onFrame", "(Ljava/nio/ByteBuffer;JJIIJJIIJJJJJ)V");
         env->DeleteLocalRef(clazz);
         if (!method) {
             env->ExceptionClear();
@@ -330,7 +330,16 @@ void UVCPreview::do_raw_frame_callback(uvc_frame_t *frame, int64_t receive_boot_
                 env->CallVoidMethod(mRawFrameCallbackObj, mRawFrameMethod, buffer,
                                     static_cast<jlong>(receive_boot_ns),
                                     static_cast<jlong>(frame->sequence),
-                                    static_cast<jint>(frame->width), static_cast<jint>(frame->height));
+                                    static_cast<jint>(frame->width), static_cast<jint>(frame->height),
+                                    static_cast<jlong>(frame->diagnostic_pts),
+                                    static_cast<jlong>(frame->diagnostic_scr),
+                                    static_cast<jint>(frame->diagnostic_sof),
+                                    static_cast<jint>(frame->diagnostic_flags),
+                                    static_cast<jlong>(frame->diagnostic_clock_hz),
+                                    static_cast<jlong>(frame->diagnostic_first_pts),
+                                    static_cast<jlong>(frame->diagnostic_payload_count),
+                                    static_cast<jlong>(frame->diagnostic_pts_count),
+                                    static_cast<jlong>(frame->diagnostic_boundary));
                 if (env->ExceptionCheck()) {
                     env->ExceptionDescribe();
                     env->ExceptionClear();
@@ -501,6 +510,10 @@ void UVCPreview::uvc_preview_frame_callback(uvc_frame_t *frame, void *vptr_args)
         clock_gettime(CLOCK_BOOTTIME, &now);
         const int64_t boot_ns = static_cast<int64_t>(now.tv_sec) * 1000000000LL + now.tv_nsec;
         preview->do_raw_frame_callback(frame, boot_ns);
+        // Recording sees every incoming MJPEG frame. Only preview decode is paced.
+        if (preview->mLastPreviewBootNs && boot_ns - preview->mLastPreviewBootNs < 100000000LL)
+            return;
+        preview->mLastPreviewBootNs = boot_ns;
     }
 //    if (UNLIKELY(
 //            ((frame->frame_format != UVC_FRAME_FORMAT_MJPEG)
@@ -534,7 +547,9 @@ void UVCPreview::uvc_preview_frame_callback(uvc_frame_t *frame, void *vptr_args)
 void UVCPreview::addPreviewFrame(uvc_frame_t *frame) {
 
     pthread_mutex_lock(&preview_mutex);
-    if (isRunning() && (previewFrames.size() < MAX_FRAME)) {
+    if (isRunning()) {
+        // Keep only the newest waiting preview. Never discard recording frames here.
+        while (previewFrames.size()) recycle_frame(previewFrames.remove(0));
         previewFrames.put(frame);
         frame = NULL;
         pthread_cond_signal(&preview_sync);
