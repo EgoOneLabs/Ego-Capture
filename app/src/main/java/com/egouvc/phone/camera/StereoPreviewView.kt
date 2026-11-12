@@ -31,17 +31,17 @@ class StereoPreviewView @JvmOverloads constructor(context: Context, attrs: Attri
         val density = resources.displayMetrics.density
         val gap = 10f * density
         val labelHeight = 20f * density
-        val panelWidth = width.toFloat()
-        val panelHeight = minOf((height - gap - 2 * labelHeight) / 2f, panelWidth * 9f / 16f)
+        // Fixed horizontal pair: left sensor on the left, right sensor on the right.
+        val panelWidth = (width - gap) / 2f
+        val panelHeight = height - labelHeight
         if (panelWidth <= 0f || panelHeight <= 0f) return
-        val top = (height - (2 * (panelHeight + labelHeight) + gap)) / 2f
         val bitmap = frame?.takeUnless { it.isRecycled }
         for (eye in 0..1) {
-            val labelTop = top + eye * (panelHeight + labelHeight + gap)
+            val left = eye * (panelWidth + gap)
             paint.color = Color.rgb(109, 131, 148)
             paint.textSize = 12f * resources.displayMetrics.scaledDensity
-            canvas.drawText(labels[eye], 0f, labelTop + 14f * density, paint)
-            val rect = RectF(0f, labelTop + labelHeight, panelWidth, labelTop + labelHeight + panelHeight)
+            canvas.drawText(labels[eye], left, 14f * density, paint)
+            val rect = RectF(left, labelHeight, left + panelWidth, height.toFloat())
             paint.color = Color.rgb(20, 35, 50)
             canvas.drawRoundRect(rect, 8f * density, 8f * density, paint)
             if (bitmap != null) {
