@@ -49,6 +49,7 @@ class UvcCameraSource(
     // Camera close invalidates preview callbacks, never this local recording job.
     private val recordingJob = RecordingJobState()
     private var recordingMetrics: RecordingMetrics? = null
+    private var outputDirectory: String? = null
 
     fun open(device: UsbDevice, previewSurface: Surface) {
         check(Looper.myLooper() == Looper.getMainLooper())
@@ -147,6 +148,9 @@ class UvcCameraSource(
             )
             session.pipeline = pipeline
             val recorder = EpisodeRecorder(context, session.device, selected.width, selected.height,
+                onExported = { directory -> main.post {
+                    if (recordingJob.ownsBusyJob(session.id)) outputDirectory = directory.absolutePath
+                } },
                 onAudioStatus = { message -> main.post {
                     if (recordingJob.updateAudio(session.id, message)) publish(status)
                 } },
@@ -213,6 +217,7 @@ class UvcCameraSource(
             check(display.isValid) { "预览 Surface 已释放" }
             opened.setPreviewDisplay(display)
             opened.startPreview()
+            recorder.startImuMonitoring()
             main.post {
                 if (session.id == generation) {
                     if (status.phase == CameraPhase.OPENING) {
@@ -262,6 +267,7 @@ class UvcCameraSource(
         publish(CameraStatus(CameraPhase.IDLE))
         session?.worker?.post {
             try {
+                session.recorder?.close()
                 try { session.camera?.setRawFrameCallback(null) }
                 catch (error: Exception) { Log.w(TAG, "Raw callback cleanup failed", error) }
                 try { session.camera?.setFrameCallback(null, UVCCamera.PIXEL_FORMAT_RGBX) }
@@ -291,6 +297,7 @@ class UvcCameraSource(
         // create another recording before this job has finished saving/exporting.
         if (!recordingJob.begin(session.id)) return
         recordingMetrics = null
+        outputDirectory = null
         publish(status)
         recorder.start()
     }
@@ -342,6 +349,8 @@ class UvcCameraSource(
         val job = recordingJob.snapshot()
         status = value.copy(
             recording = job.isBusy(),
+            recordingStage = job.stage,
+            outputDirectory = outputDirectory,
             captureCanStop = job.canStopCapture(),
             recordingMessage = job.message,
             audioMessage = job.audioMessage,
@@ -365,6 +374,8 @@ data class CameraStatus(
     val rawFramesObserved: Long = 0,
     val message: String? = null,
     val recording: Boolean = false,
+    val recordingStage: RecordingJobState.Stage = RecordingJobState.Stage.IDLE,
+    val outputDirectory: String? = null,
     val captureCanStop: Boolean = false,
     val audioMessage: String? = null,
     val recordingMessage: String? = null,

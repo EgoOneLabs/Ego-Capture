@@ -1,378 +1,213 @@
 package com.egouvc.phone
 
 import android.Manifest
-import com.egouvc.phone.export.EgoRecordFormat
 import android.app.Activity
+import android.content.Context
 import android.content.Intent
-import android.graphics.Bitmap
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
 import android.hardware.usb.UsbManager
 import android.os.Bundle
-import android.content.Context
-import android.view.ViewGroup
-import android.widget.TextView
-import android.widget.AdapterView
-import android.widget.ArrayAdapter
-import com.egouvc.phone.recording.CaptureRates
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
-import android.view.View
 import android.view.SurfaceHolder
+import android.view.View
+import android.view.ViewGroup
+import android.view.WindowInsets
+import android.view.inputmethod.InputMethodManager
+import android.widget.ArrayAdapter
+import android.widget.AdapterView
+import android.widget.TextView
+import android.widget.Toast
 import com.egouvc.phone.camera.CameraPhase
 import com.egouvc.phone.camera.CameraStatus
 import com.egouvc.phone.camera.UvcCameraSource
 import com.egouvc.phone.databinding.ActivityMainBinding
+import com.egouvc.phone.export.EgoRecordFormat
+import com.egouvc.phone.recording.CaptureRates
+import com.egouvc.phone.recording.RecordingJobState.Stage
+import com.egouvc.phone.ui.AutoConnectPolicy
 import com.egouvc.phone.usb.UsbConnectionState
-import com.egouvc.phone.usb.UsbDeviceManager
 import com.egouvc.phone.usb.UsbStatus
-import java.util.Locale
 
 class MainActivity : Activity() {
     private lateinit var binding: ActivityMainBinding
-    private val deviceManager: UsbDeviceManager
-        get() = (application as EgoUvcApplication).usbDeviceManager
-    private val statusObserver: (UsbStatus) -> Unit = ::renderStatus
-    private var cameraRequestPending = false
-    private lateinit var cameraSource: UvcCameraSource
-    private var previewSurfaceReady = false
-    private var cameraPhase = CameraPhase.IDLE
-    private var recording = false
-    private var recordingDetailsExpanded = false
-    private var cameraSourceIsProbing = false
-
-    private var lastCameraStatus: CameraStatus? = null
-    private var lastUsbStatus: UsbStatus? = null
-    private var previewFps = 0.0
     private lateinit var languageContext: Context
+    private lateinit var cameraSource: UvcCameraSource
+    private val manager get() = (application as EgoUvcApplication).usbDeviceManager
+    private val main = Handler(Looper.getMainLooper())
+    private val autoConnect = AutoConnectPolicy()
+    private val observer: (UsbStatus) -> Unit = ::onUsbStatus
+    private var foreground = false
+    private var surfaceReady = false
+    private var permissionInFlight = false
+    private var status = CameraStatus(CameraPhase.IDLE)
+    private var lastError: String? = null
+    private var reconcilePosted = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         languageContext = UiLanguage.localized(this, UiLanguage.isEnglish(this))
         binding = ActivityMainBinding.inflate(layoutInflater.cloneInContext(languageContext))
         setContentView(binding.root)
-        initRecordingDetails()
-        val exportPrefs = getSharedPreferences("export_format", MODE_PRIVATE)
-        binding.taskNameInput.setText(exportPrefs.getString("task_name", "task001"))
-        binding.exportDeviceInput.setText(exportPrefs.getString("device_id", "2UQ2"))
-        binding.languageButton.setOnClickListener {
-            val english = !UiLanguage.isEnglish(this)
-            getSharedPreferences("ui", MODE_PRIVATE).edit().putBoolean("english", english).apply()
-            languageContext = UiLanguage.localized(this, english)
-            reloadStaticText(binding.root)
-            refreshLanguageLabels()
-            lastUsbStatus?.let(::renderStatus)
-            lastCameraStatus?.let(::renderCamera)
+        cameraSource = UvcCameraSource(applicationContext, ::renderCamera, ::showPreview)
+        window.setDecorFitsSystemWindows(false)
+        binding.root.setOnApplyWindowInsetsListener { view, insets ->
+            val bars = insets.getInsets(WindowInsets.Type.systemBars())
+            val ime = insets.getInsets(WindowInsets.Type.ime())
+            val unit = resources.displayMetrics.density
+            val keyboard = insets.isVisible(WindowInsets.Type.ime())
+            val available = resources.displayMetrics.heightPixels - bars.top - maxOf(bars.bottom, ime.bottom)
+            binding.header.visibility = if (keyboard && available / unit < 360) View.GONE else View.VISIBLE
+            binding.outputGroup.visibility = if (keyboard) View.GONE else View.VISIBLE
+            view.setPadding(bars.left+(12*unit).toInt(), bars.top+(8*unit).toInt(),
+                bars.right+(12*unit).toInt(), maxOf(bars.bottom,ime.bottom)+(8*unit).toInt())
+            insets
         }
-        val initialFps = exportPrefs.getInt("target_saved_fps", 30).let { if (it in CaptureRates.choices) it else 30 }
+        binding.root.requestApplyInsets()
+        val prefs = getSharedPreferences("export_format", MODE_PRIVATE)
+        binding.taskNameInput.setText(prefs.getString("task_name", "task001"))
+        binding.exportDeviceInput.setText(prefs.getString("device_id", "2UQ2"))
         binding.savedFpsSpinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item,
             CaptureRates.choices.map { "$it FPS" })
-        binding.savedFpsSpinner.setSelection(CaptureRates.choices.indexOf(initialFps))
+        val fps = prefs.getInt("target_saved_fps",30).let { if (it in CaptureRates.choices) it else 30 }
+        binding.savedFpsSpinner.setSelection(CaptureRates.choices.indexOf(fps))
         binding.savedFpsSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onNothingSelected(parent: AdapterView<*>?) = Unit
             override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
-                if (!recording) {
-                    exportPrefs.edit().putInt("target_saved_fps", CaptureRates.choices[position]).apply()
-                    refreshLanguageLabels()
-                }
+                if (!status.recording) prefs.edit().putInt("target_saved_fps", CaptureRates.choices[position]).apply()
             }
         }
-        refreshLanguageLabels()
-        binding.diagnosticsToggle.setOnClickListener {
-            val expanded = binding.diagnosticsPanel.visibility != View.VISIBLE
-            binding.diagnosticsPanel.visibility = if (expanded) View.VISIBLE else View.GONE
-            refreshLanguageLabels()
-        }
-        binding.refreshButton.setOnClickListener { deviceManager.refresh() }
-        binding.requestPermissionButton.setOnClickListener { requestNeededPermission() }
-        cameraSource = UvcCameraSource(applicationContext, ::renderCamera, ::showDecodedPreview)
-        binding.probeImuButton.setOnClickListener { cameraSource.probeImu() }
-        binding.decodedPreviewImage.onRenderedFps = { fps ->
-            previewFps = fps
-            renderPreviewFps()
+        binding.languageButton.setOnClickListener {
+            val english = !UiLanguage.isEnglish(this)
+            getSharedPreferences("ui",MODE_PRIVATE).edit().putBoolean("english",english).apply()
+            languageContext = UiLanguage.localized(this,english)
+            reloadText(binding.root)
+            renderCamera(status)
         }
         binding.startCaptureButton.setOnClickListener {
+            hideKeyboard()
             if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-                requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), AUDIO_REQUEST_CODE)
+                if (!permissionInFlight) {
+                    permissionInFlight=true
+                    requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO),AUDIO_REQUEST)
+                }
                 return@setOnClickListener
             }
             try {
                 val task = EgoRecordFormat.component(binding.taskNameInput.text.toString())
                 val device = EgoRecordFormat.component(binding.exportDeviceInput.text.toString())
-                exportPrefs.edit().putString("task_name", task).putString("device_id", device).apply()
+                prefs.edit().putString("task_name",task).putString("device_id",device).apply()
+                lastError=null
                 cameraSource.startEpisodeRecording()
-            } catch (_: IllegalArgumentException) {
-                binding.recordingStatusValue.text = tr("请填写任务名与设备编号，不可包含斜杠、换行或 .. 路径。")
+            } catch (_: IllegalArgumentException) { toast(R.string.onepage_invalid_name) }
+        }
+        binding.stopCaptureButton.setOnClickListener { hideKeyboard(); cameraSource.stopEpisodeRecording() }
+        val retryConnection = View.OnClickListener {
+            if (status.phase == CameraPhase.IDLE || status.phase == CameraPhase.ERROR) {
+                autoConnect.reset(); manager.refresh(); scheduleConnect()
             }
         }
-        binding.stopCaptureButton.setOnClickListener { cameraSource.stopEpisodeRecording() }
-        binding.openCameraButton.setOnClickListener {
-            deviceManager.refresh()
-            val device = deviceManager.readyDevice()
-            if (device == null) {
-                binding.cameraMessageValue.text = uiString(R.string.video_requires_ready)
-            } else if (previewSurfaceReady) {
-                cameraSource.open(device, binding.previewSurface.holder.surface)
-            } else {
-                binding.cameraMessageValue.text = uiString(R.string.preview_surface_unavailable)
-            }
-        }
-        binding.closeCameraButton.setOnClickListener { cameraSource.close() }
+        binding.decodedPreviewImage.setOnClickListener(retryConnection)
+        binding.previewHint.setOnClickListener(retryConnection)
         binding.previewSurface.holder.addCallback(object : SurfaceHolder.Callback {
-            override fun surfaceCreated(holder: SurfaceHolder) {
-                previewSurfaceReady = true
-                updateCameraButtons()
-            }
+            override fun surfaceCreated(holder: SurfaceHolder) { surfaceReady=true; scheduleConnect() }
             override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) = Unit
-            override fun surfaceDestroyed(holder: SurfaceHolder) {
-                previewSurfaceReady = false
-                cameraSource.close()
-                updateCameraButtons()
-            }
+            override fun surfaceDestroyed(holder: SurfaceHolder) { surfaceReady=false; cameraSource.close() }
         })
-        Log.i(TAG, "MainActivity created")
+        renderCamera(status)
     }
 
-    private fun initRecordingDetails() {
-        binding.recordingDetailsToggle.setOnClickListener {
-            recordingDetailsExpanded = !recordingDetailsExpanded
-            updateRecordingDetails()
-        }
-        updateRecordingDetails()
-    }
-
-    private fun updateRecordingDetails() {
-        binding.recordingStatusValue.maxLines = if (recordingDetailsExpanded) Int.MAX_VALUE else 4
-        binding.recordingStatusValue.ellipsize = if (recordingDetailsExpanded) null else android.text.TextUtils.TruncateAt.END
-        binding.recordingDetailsToggle.text = uiString(
-            if (recordingDetailsExpanded) R.string.ui_collapse_status else R.string.ui_expand_status,
-        )
-    }
-
-    override fun onStart() {
-        super.onStart()
-        deviceManager.observe(statusObserver)
-    }
-
-    override fun onResume() {
-        super.onResume()
-        deviceManager.refresh()
-    }
-
+    override fun onStart() { super.onStart(); foreground=true; manager.observe(observer) }
+    override fun onResume() { super.onResume(); manager.refresh(); scheduleConnect() }
     override fun onStop() {
-        cameraSource.close()
-        deviceManager.removeObserver(statusObserver)
-        super.onStop()
+        foreground=false; autoConnect.reset(); cameraSource.close(); manager.removeObserver(observer); super.onStop()
     }
-
     override fun onNewIntent(intent: Intent) {
-        super.onNewIntent(intent)
-        setIntent(intent)
-        if (intent.action == UsbManager.ACTION_USB_DEVICE_ATTACHED) {
-            Log.i(TAG, "Target attach intent received")
-            deviceManager.refresh()
-        }
+        super.onNewIntent(intent); setIntent(intent)
+        if (intent.action == UsbManager.ACTION_USB_DEVICE_ATTACHED) manager.refresh()
     }
-
-    private fun requestNeededPermission() {
-        when (deviceManager.status.state) {
-            UsbConnectionState.CAMERA_PERMISSION_REQUIRED -> {
-                if (cameraRequestPending) return
-                cameraRequestPending = true
-                binding.requestPermissionButton.isEnabled = false
-                Log.i(TAG, "Requesting CAMERA permission for USB video device")
-                requestPermissions(arrayOf(Manifest.permission.CAMERA), CAMERA_REQUEST_CODE)
-            }
-            UsbConnectionState.USB_PERMISSION_REQUIRED -> deviceManager.requestUsbPermission()
-            else -> Unit
-        }
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, results: IntArray) {
+        super.onRequestPermissionsResult(requestCode,permissions,results)
+        permissionInFlight=false
+        if (results.isEmpty() || results[0] != PackageManager.PERMISSION_GRANTED) toast(R.string.onepage_permission_needed)
+        manager.refresh(); scheduleConnect()
     }
-
-    override fun onRequestPermissionsResult(
-        requestCode: Int,
-        permissions: Array<out String>,
-        grantResults: IntArray,
-    ) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == AUDIO_REQUEST_CODE) {
-            binding.audioStatusValue.text = if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED)
-                tr("麦克风权限已授予，请再次点击开始采集") else tr("麦克风权限未授予，无法开始带声音采集")
-            return
-        }
-        if (requestCode != CAMERA_REQUEST_CODE) return
-        cameraRequestPending = false
-        val granted = grantResults.isNotEmpty() &&
-            grantResults[0] == PackageManager.PERMISSION_GRANTED &&
-            checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
-        if (granted) {
-            Log.i(TAG, "CAMERA permission granted")
-            deviceManager.refresh()
-            deviceManager.requestUsbPermission()
-        } else {
-            deviceManager.onCameraPermissionDenied()
-        }
+    private fun onUsbStatus(value: UsbStatus) {
+        if (value.state != UsbConnectionState.READY && status.phase in listOf(CameraPhase.OPENING,CameraPhase.STREAMING)) cameraSource.close()
+        if (value.state == UsbConnectionState.DISCONNECTED) autoConnect.reset()
+        scheduleConnect()
     }
-
-    private fun renderCamera(status: CameraStatus) {
-        lastCameraStatus = status
-        cameraPhase = status.phase
-        recording = status.recording
-        cameraSourceIsProbing = status.imuProbing
-        val localSaveWithoutCamera = status.recording &&
-            (status.phase == CameraPhase.IDLE || status.phase == CameraPhase.ERROR)
-        val recordingMessage = status.recordingMessage ?: uiString(R.string.capture_text_12)
-        binding.recordingStatusValue.text = tr(if (localSaveWithoutCamera)
-            "相机连接已关闭；本地保存或导出继续，请保持应用在前台。\n$recordingMessage"
-            else recordingMessage)
-        if (status.phase == CameraPhase.IDLE || status.phase == CameraPhase.ERROR) {
-            binding.decodedPreviewImage.clearFrame()
-            binding.decodedPreviewImage.visibility = View.VISIBLE
-        }
-        binding.cameraStateValue.text = when (status.phase) {
-            CameraPhase.IDLE -> uiString(R.string.video_idle)
-            CameraPhase.OPENING -> uiString(R.string.video_opening)
-            CameraPhase.STREAMING -> uiString(R.string.video_streaming)
-            CameraPhase.ERROR -> uiString(R.string.state_error)
-        }
-        com.egouvc.phone.ui.CaptureUi.status(binding.cameraStateValue, when (status.phase) {
-            CameraPhase.STREAMING -> com.egouvc.phone.ui.CaptureUi.READY
-            CameraPhase.OPENING -> com.egouvc.phone.ui.CaptureUi.WAITING
-            CameraPhase.ERROR -> com.egouvc.phone.ui.CaptureUi.ERROR
-            else -> com.egouvc.phone.ui.CaptureUi.NEUTRAL
-        })
-        binding.cameraModeValue.text = status.configuredMode?.let(::tr) ?: uiString(R.string.not_available)
-        binding.cameraFpsValue.text = if (status.rawCallbackFps != null || status.callbackFps != null) {
-            tr(java.lang.String.format(Locale.US,
-                "原始接收：%.1f FPS / %d 帧；解码回调：%.1f FPS / %d 帧（均非保存帧率）",
-                status.rawCallbackFps ?: 0.0, status.rawFramesObserved,
-                status.callbackFps ?: 0.0, status.framesObserved))
-        } else uiString(R.string.video_fps_waiting)
-        binding.cameraModesValue.text = status.supportedModes ?: uiString(R.string.not_available)
-        binding.cameraMessageValue.text = tr(status.message.orEmpty())
-        binding.imuProbeValue.text = tr(status.imuProbeMessage ?: "IMU：尚未探测")
-        binding.audioStatusValue.text = tr(status.audioMessage ?: "头环声音：开始采集后检查 USB 麦克风")
-        if (status.metrics == null) binding.storageRateValue.text = uiString(R.string.capture_text_11)
-        status.metrics?.let { m ->
-            binding.storageRateValue.text = if (UiLanguage.isEnglish(this)) {
-                String.format(Locale.US, "Raw video: %.2f MB/s now · %.2f MB/s average · %.1f MB saved\nSaved: %.1f / %d FPS · MB = 1,000,000 bytes", m.videoWindowMbPerSec, m.videoAverageMbPerSec, m.videoMb, m.savedFps, m.targetFps)
-            } else {
-                String.format(Locale.US, "原始视频：当前 %.2f MB/s · 平均 %.2f MB/s · 已存 %.1f MB\n实际保存 %.1f / 目标 %d FPS · MB = 1,000,000 字节", m.videoWindowMbPerSec, m.videoAverageMbPerSec, m.videoMb, m.savedFps, m.targetFps)
-            }
-        }
-        updateCameraButtons()
-    }
-
-    private fun showDecodedPreview(bitmap: Bitmap) {
-        if (cameraPhase != CameraPhase.STREAMING) {
-            bitmap.recycle()
-            return
-        }
-        binding.decodedPreviewImage.showFrame(bitmap)
-        binding.decodedPreviewImage.visibility = View.VISIBLE
-    }
-
-    private fun updateCameraButtons() {
-        if (!::binding.isInitialized) return
-        binding.openCameraButton.isEnabled = previewSurfaceReady &&
-            deviceManager.status.state == UsbConnectionState.READY &&
-            (cameraPhase == CameraPhase.IDLE || cameraPhase == CameraPhase.ERROR)
-        binding.closeCameraButton.isEnabled = cameraPhase == CameraPhase.OPENING ||
-            cameraPhase == CameraPhase.STREAMING
-        binding.startCaptureButton.isEnabled = cameraPhase == CameraPhase.STREAMING && !recording
-        binding.taskNameInput.isEnabled = !recording
-        binding.exportDeviceInput.isEnabled = !recording
-        binding.savedFpsSpinner.isEnabled = !recording
-        binding.stopCaptureButton.isEnabled = cameraPhase == CameraPhase.STREAMING &&
-            lastCameraStatus?.captureCanStop == true
-        binding.probeImuButton.isEnabled = cameraPhase == CameraPhase.STREAMING && !recording &&
-            !cameraSourceIsProbing
-    }
-
-    private fun renderStatus(status: UsbStatus) {
-        lastUsbStatus = status
-        if (status.state != UsbConnectionState.READY && cameraPhase != CameraPhase.IDLE &&
-            cameraPhase != CameraPhase.ERROR
-        ) cameraSource.close()
-        binding.deviceNameValue.text = when {
-            status.productName != null && status.deviceName != null ->
-                "${status.productName}\n${status.deviceName}"
-            else -> status.deviceName ?: uiString(R.string.not_available)
-        }
-        binding.vidPidValue.text = if (status.vendorId != null && status.productId != null) {
-            String.format(Locale.US, "%04x:%04x", status.vendorId, status.productId)
-        } else {
-            uiString(R.string.not_available)
-        }
-        binding.hostValue.text = uiString(if (status.hostSupported) R.string.supported else R.string.unsupported)
-        binding.connectionValue.text = uiString(
-            when (status.state) {
-                UsbConnectionState.DISCONNECTED -> R.string.state_disconnected
-                UsbConnectionState.CAMERA_PERMISSION_REQUIRED -> R.string.state_camera_required
-                UsbConnectionState.USB_PERMISSION_REQUIRED -> R.string.state_usb_required
-                UsbConnectionState.USB_PERMISSION_PENDING -> R.string.state_usb_pending
-                UsbConnectionState.READY -> R.string.state_ready
-                UsbConnectionState.ERROR -> R.string.state_error
-            },
-        )
-        com.egouvc.phone.ui.CaptureUi.status(binding.connectionValue, when (status.state) {
-            UsbConnectionState.READY -> com.egouvc.phone.ui.CaptureUi.READY
-            UsbConnectionState.ERROR -> com.egouvc.phone.ui.CaptureUi.ERROR
-            UsbConnectionState.DISCONNECTED -> com.egouvc.phone.ui.CaptureUi.NEUTRAL
-            else -> com.egouvc.phone.ui.CaptureUi.WAITING
-        })
-        binding.cameraPermissionValue.text = uiString(
-            if (status.cameraPermissionGranted) R.string.granted else R.string.not_granted,
-        )
-        binding.usbPermissionValue.text = uiString(
-            when {
-                status.deviceName == null -> R.string.no_target_device
-                status.usbPermissionGranted -> R.string.granted
-                else -> R.string.not_granted
-            },
-        )
-        binding.requestPermissionButton.isEnabled = !cameraRequestPending &&
-            (status.state == UsbConnectionState.CAMERA_PERMISSION_REQUIRED ||
-                status.state == UsbConnectionState.USB_PERMISSION_REQUIRED)
-        binding.messageValue.text = tr(status.message.orEmpty())
-        binding.messageValue.visibility = if (status.message.isNullOrBlank()) View.GONE else View.VISIBLE
-        updateCameraButtons()
-    }
-
-    private fun tr(text: String) = UiLanguage.display(this, text)
-    private fun uiString(id: Int) = languageContext.getString(id)
-
-    private fun reloadStaticText(view: View) {
-        if (view is TextView) {
-            val tag = view.tag as? String
-            if (tag != null && ':' in tag) {
-                val kind = tag.substringBefore(':')
-                val id = resources.getIdentifier(tag.substringAfter(':'), "string", packageName)
-                if (id != 0) {
-                    if (kind == "hint") view.hint = uiString(id) else view.text = uiString(id)
+    private fun scheduleConnect() {
+        if (reconcilePosted) return
+        reconcilePosted=true
+        main.post {
+            reconcilePosted=false
+            if (!foreground || permissionInFlight || !surfaceReady) return@post
+            val usb=manager.status
+            when (autoConnect.next(usb.deviceName,foreground,surfaceReady,
+                checkSelfPermission(Manifest.permission.CAMERA)==PackageManager.PERMISSION_GRANTED,
+                checkSelfPermission(Manifest.permission.RECORD_AUDIO)==PackageManager.PERMISSION_GRANTED,
+                usb.usbPermissionGranted,usb.state==UsbConnectionState.USB_PERMISSION_PENDING,
+                status.phase==CameraPhase.IDLE || status.phase==CameraPhase.ERROR,status.recording)) {
+                AutoConnectPolicy.Action.CAMERA_PERMISSION -> {
+                    permissionInFlight=true; requestPermissions(arrayOf(Manifest.permission.CAMERA),CAMERA_REQUEST)
                 }
+                AutoConnectPolicy.Action.AUDIO_PERMISSION -> {
+                    permissionInFlight=true; requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO),AUDIO_REQUEST)
+                }
+                AutoConnectPolicy.Action.USB_PERMISSION -> manager.requestUsbPermission()
+                AutoConnectPolicy.Action.OPEN -> manager.readyDevice()?.let { cameraSource.open(it,binding.previewSurface.holder.surface) }
+                else -> Unit
             }
         }
-        if (view is ViewGroup) for (i in 0 until view.childCount) reloadStaticText(view.getChildAt(i))
     }
-
-    private fun refreshLanguageLabels() {
-        updateRecordingDetails()
-        val english = UiLanguage.isEnglish(this)
-        binding.languageButton.text = if (english) "中文" else "English"
-        val expanded = binding.diagnosticsPanel.visibility == View.VISIBLE
-        binding.diagnosticsToggle.text = tr(if (expanded) "收起设备与诊断详情" else "展开设备与诊断详情")
-        val fps = CaptureRates.choices[binding.savedFpsSpinner.selectedItemPosition.coerceAtLeast(0)]
-        binding.savedFpsHint.text = if (english) "Target: $fps FPS; actual rate is measured during capture" else "保存目标：$fps FPS；实际帧率在采集时显示"
-        renderPreviewFps()
+    private fun showPreview(bitmap: Bitmap) {
+        if (status.phase==CameraPhase.STREAMING) binding.decodedPreviewImage.showFrame(bitmap) else bitmap.recycle()
     }
-
-    private fun renderPreviewFps() {
-        binding.previewFpsValue.text = String.format(Locale.US,
-            if (UiLanguage.isEnglish(this)) "Stereo preview: %.1f FPS · left / right"
-            else "双目预览：%.1f FPS · 左 / 右", previewFps)
+    private fun renderCamera(value: CameraStatus) {
+        status=value
+        val streaming=value.phase==CameraPhase.STREAMING
+        if (!streaming && value.phase!=CameraPhase.OPENING) binding.decodedPreviewImage.clearFrame()
+        binding.previewHint.visibility=if (streaming) View.GONE else View.VISIBLE
+        binding.previewHint.text=getStringUi(if (value.phase==CameraPhase.OPENING) R.string.onepage_connecting else R.string.onepage_connect_hint)
+        binding.decodedPreviewImage.setLabels(getStringUi(R.string.onepage_left),getStringUi(R.string.onepage_right))
+        binding.decodedPreviewImage.contentDescription=getStringUi(R.string.onepage_preview_description)
+        binding.languageButton.text=if (UiLanguage.isEnglish(this)) "中文" else "English"
+        binding.startCaptureButton.isEnabled=streaming && !value.recording
+        binding.stopCaptureButton.isEnabled=streaming && value.captureCanStop
+        binding.taskNameInput.isEnabled=!value.recording
+        binding.exportDeviceInput.isEnabled=!value.recording
+        binding.savedFpsSpinner.isEnabled=!value.recording
+        binding.startCaptureButton.text=getStringUi(if (value.captureCanStop) R.string.onepage_recording else R.string.capture_text_7)
+        binding.stopCaptureButton.text=getStringUi(if (value.recording && !value.captureCanStop) R.string.onepage_saving else R.string.capture_text_8)
+        binding.outputPath.text=if (value.recordingStage==Stage.COMPLETE) value.outputDirectory.orEmpty() else ""
+        val error=when {
+            value.recordingStage==Stage.FAILED -> value.recordingMessage
+            value.phase==CameraPhase.ERROR -> value.message
+            else -> null
+        }
+        if (error!=null && error!=lastError) {
+            lastError=error; Log.e("EgoUVCPhone",error); toast(R.string.onepage_error)
+        }
+        scheduleConnect()
     }
-
-    companion object {
-        private const val TAG = "EgoUVCPhone"
-        private const val CAMERA_REQUEST_CODE = 1001
-        private const val AUDIO_REQUEST_CODE = 1002
+    private fun reloadText(view: View) {
+        if (view is TextView) {
+            val tag=view.tag as? String
+            if (tag!=null && ':' in tag) {
+                val id=resources.getIdentifier(tag.substringAfter(':'),"string",packageName)
+                if (id!=0) { if (tag.startsWith("hint:")) view.hint=getStringUi(id) else view.text=getStringUi(id) }
+            }
+        }
+        if (view is ViewGroup) for (i in 0 until view.childCount) reloadText(view.getChildAt(i))
     }
+    private fun hideKeyboard() {
+        (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager).hideSoftInputFromWindow(binding.root.windowToken,0)
+        binding.root.clearFocus()
+    }
+    private fun getStringUi(id: Int)=languageContext.getString(id)
+    private fun toast(id: Int) { Toast.makeText(this,getStringUi(id),Toast.LENGTH_LONG).show() }
+    companion object { private const val CAMERA_REQUEST=1001; private const val AUDIO_REQUEST=1002 }
 }

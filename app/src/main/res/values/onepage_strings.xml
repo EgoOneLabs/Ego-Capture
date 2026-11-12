@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="onepage_left">左画面</string>
+    <string name="onepage_right">右画面</string>
+    <string name="onepage_fps">目标保存帧率</string>
+    <string name="onepage_output">保存位置</string>
+    <string name="onepage_connect_hint">连接头环后自动预览</string>
+    <string name="onepage_connecting">正在连接…</string>
+    <string name="onepage_recording">采集中…</string>
+    <string name="onepage_saving">保存中…</string>
+    <string name="onepage_invalid_name">请填写有效的任务名称和设备编号</string>
+    <string name="onepage_permission_needed">请允许相机、录音和USB权限；可轻触预览区域重试</string>
+    <string name="onepage_error">操作未完成，请检查连接；原始记录保留</string>
+    <string name="onepage_preview_description">左右相机实时预览</string>
+</resources>

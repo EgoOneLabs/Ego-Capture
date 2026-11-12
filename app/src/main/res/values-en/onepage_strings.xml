@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="onepage_left">Left view</string>
+    <string name="onepage_right">Right view</string>
+    <string name="onepage_fps">Target frame rate</string>
+    <string name="onepage_output">Saved location</string>
+    <string name="onepage_connect_hint">Connect the headband to preview</string>
+    <string name="onepage_connecting">Connecting…</string>
+    <string name="onepage_recording">Recording…</string>
+    <string name="onepage_saving">Saving…</string>
+    <string name="onepage_invalid_name">Enter a valid task name and device ID</string>
+    <string name="onepage_permission_needed">Allow camera, microphone and USB access; tap the preview to retry</string>
+    <string name="onepage_error">Operation failed. Check the connection; raw records are retained</string>
+    <string name="onepage_preview_description">Live left and right camera preview</string>
+</resources>

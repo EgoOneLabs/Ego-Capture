@@ -1,5 +1,7 @@
 # Ego Capture (EgoStereoIMU)
 
+This branch includes the **code17 single-page UI** with automatic preview and idle IMU reads. APK build and phone acceptance are pending; see [the UI notes](docs/SINGLE_PAGE.zh-CN.md).
+
 **An Android egocentric stereo, IMU and USB-audio recorder.**
 
 [简体中文](README.md) · [Stereo calibration tools](https://github.com/EgoOneLabs/Ego-Calib-Tools/tree/feat/ego-stereo-calibration/ego_stereo) · [Detailed evidence/handoff](docs/STATUS-20261106.md)

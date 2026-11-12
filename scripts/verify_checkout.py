@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify the published code16 source and native build inputs without a phone."""
+"""Verify the published code17 source and native build inputs without a phone."""
 import hashlib
 import json
 from pathlib import Path
@@ -9,14 +9,14 @@ import sys
 
 def verify(root):
     root = Path(root).resolve()
-    manifest = json.loads((root / 'docs/code16-source-manifest.json').read_text())
+    manifest = json.loads((root / 'docs/code17-source-manifest.json').read_text())
     problems = []
     for name, expected in manifest['files'].items():
         path = (root / name).resolve()
         if root not in path.parents or not path.is_file():
             problems.append('Missing/unsafe source: ' + name)
         elif hashlib.sha256(path.read_bytes()).hexdigest() != expected:
-            problems.append('Source differs from code16 baseline: ' + name)
+            problems.append('Source differs from code17 baseline: ' + name)
     for name in ['gradlew', 'gradlew.bat', 'gradle/wrapper/gradle-wrapper.jar',
                  'gradle/wrapper/gradle-wrapper.properties', 'settings.gradle.kts',
                  'build.gradle.kts', 'third_party/uvcandroid/LICENSE-APACHE-2.0.txt',

@@ -42,15 +42,52 @@ class EpisodeRecorder(
     private val onRecordingStatus: (Stage, String) -> Unit,
     private val onMetrics: (RecordingMetrics) -> Unit = {},
     private val onAudioStatus: (String) -> Unit = {},
+    private val onExported: (File) -> Unit = {},
 ) {
     private val controller = Executors.newSingleThreadExecutor { Thread(it, "EgoUVC-Episode-Control") }
     private val closed = AtomicBoolean(false)
     @Volatile private var active: Episode? = null
+    private val idleImuRunning = AtomicBoolean(false)
+    private var idleImuThread: Thread? = null
     init { require(width > 0 && height > 0) }
+
+    /** Read IMU whenever the camera is powered, but persist only inside an Episode. */
+    fun startImuMonitoring() { enqueue { startIdleImu() } }
+
+    private fun startIdleImu() {
+        if (closed.get() || active != null || idleImuRunning.get()) return
+        idleImuRunning.set(true)
+        idleImuThread = Thread({
+            var errors = 0L
+            while (idleImuRunning.get() && !closed.get()) {
+                try {
+                    XuImuReader(context, device, streamingConnection, monitorConnection).use { reader ->
+                        Log.i(TAG, "Automatic idle IMU active: ${reader.transportPath}")
+                        while (idleImuRunning.get() && !closed.get()) {
+                            reader.readPacket()
+                            Thread.sleep(10)
+                        }
+                    }
+                } catch (e: Exception) {
+                    errors++
+                    if (errors == 1L || errors % 100L == 0L) Log.w(TAG, "Idle IMU read failed", e)
+                    if (idleImuRunning.get() && !closed.get()) Thread.sleep(500)
+                }
+            }
+        }, "EgoUVC-Idle-IMU").apply { start() }
+    }
+
+    /** Called on the controller, never blocks the UI. Join before creating the recording reader. */
+    private fun stopIdleImu() {
+        idleImuRunning.set(false)
+        idleImuThread?.join()
+        idleImuThread = null
+    }
 
     fun start() {
         val accepted = enqueue {
             if (active != null) return@enqueue
+            stopIdleImu()
             if (closed.get()) {
                 onRecordingStatus(Stage.FAILED, "无法开始采集：相机会话已关闭。")
                 return@enqueue
@@ -76,6 +113,7 @@ class EpisodeRecorder(
                 Log.e(TAG, "Episode start failed", t)
                 active = null
                 ep?.let { it.running.set(false); stopEpisode(it, "启动失败") }
+                startIdleImu()
                 onRecordingStatus(Stage.FAILED, "无法开始采集：${t.message}")
             }
         }
@@ -90,7 +128,9 @@ class EpisodeRecorder(
 
     fun close() {
         if (!closed.compareAndSet(false, true)) return
+        idleImuRunning.set(false)
         enqueue {
+            stopIdleImu()
             val ep = active
             active = null
             if (ep != null) stopEpisode(ep, "相机关闭")
@@ -351,6 +391,7 @@ class EpisodeRecorder(
         ep.audio?.stopAndJoin()
         try { ep.videoThread?.join() } catch (e: InterruptedException) { Thread.currentThread().interrupt() }
         try { ep.imuThread?.join() } catch (e: InterruptedException) { Thread.currentThread().interrupt() }
+        startIdleImu()
         val endBoot = SystemClock.elapsedRealtimeNanos()
         val endUnix = System.currentTimeMillis()
         try {
@@ -440,6 +481,7 @@ class EpisodeRecorder(
                     val result = StereoEpisodeExporter(context).export(ep.dir, ep.taskName, ep.deviceId) {
                         onRecordingStatus(Stage.EXPORTING, it)
                     }
+                    onExported(result.dir)
                     val rawBytes = ep.dir.walkTopDown().filter { it.isFile && it.name != "storage_stats.json" }.sumOf { it.length() }
                     val exportedBytes = result.dir.walkTopDown().filter { it.isFile }.sumOf { it.length() }
                     val eyesBytes = listOf("left", "right").sumOf { File(result.dir, "videos/$it.mkv").length() }
