@@ -43,7 +43,9 @@
         <item name="android:background">@drawable/ego_button_secondary</item>
         <item name="android:backgroundTint">@null</item>
         <item name="android:stateListAnimator">@null</item>
-        <item name="android:elevation">0dp</item>
+        <item name="android:elevation">2dp</item>
+        <item name="android:outlineAmbientShadowColor">#123A6F99</item>
+        <item name="android:outlineSpotShadowColor">#103A6F99</item>
         <item name="android:textColor">@color/ego_button_text</item>
     </style>
     <style name="EgoPrimaryButton" parent="EgoButton">

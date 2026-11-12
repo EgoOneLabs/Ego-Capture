@@ -61,6 +61,10 @@ class MainActivity : Activity() {
             val available = resources.displayMetrics.heightPixels - bars.top - maxOf(bars.bottom, ime.bottom)
             binding.header.visibility = if (keyboard && available / unit < 360) View.GONE else View.VISIBLE
             binding.outputGroup.visibility = if (keyboard) View.GONE else View.VISIBLE
+            // Shrink only while the keyboard needs space; normal preview stays 16:9.
+            val reservedDp = 310f + (if (binding.header.visibility == View.VISIBLE) 44f else 0f) +
+                (if (keyboard) 0f else 116f)
+            binding.decodedPreviewImage.maximumHeightPx = (available - reservedDp * unit).toInt()
             view.setPadding(bars.left+(12*unit).toInt(), bars.top+(8*unit).toInt(),
                 bars.right+(12*unit).toInt(), maxOf(bars.bottom,ime.bottom)+(8*unit).toInt())
             insets

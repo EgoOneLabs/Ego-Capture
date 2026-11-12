@@ -1,6 +1,6 @@
 # Ego Capture（EgoStereoIMU）
 
-当前分支包含 **code18 单页界面**，竖屏不滚动、连接后自动预览和读取 IMU。[界面说明与手机验收](docs/SINGLE_PAGE.zh-CN.md)。APK 构建和手机验收结果以构建清单为准。
+当前分支包含 **code19 单页界面**，竖屏不滚动、连接后自动预览和读取 IMU。[界面说明与手机验收](docs/SINGLE_PAGE.zh-CN.md)。APK 构建和手机验收结果以构建清单为准。
 
 **面向 Android 的第一视角双目视觉、IMU 与 USB 声音采集 App。**
 

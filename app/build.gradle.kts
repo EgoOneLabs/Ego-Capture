@@ -13,8 +13,8 @@ android {
         applicationId = "com.egouvc.phone"
         minSdk = 31
         targetSdk = 35
-        versionCode = 18
-        versionName = "0.3.7-single-page"
+        versionCode = 19
+        versionName = "0.3.8-glass-page"
     }
 
     defaultConfig {
